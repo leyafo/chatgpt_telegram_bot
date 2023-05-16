@@ -1,4 +1,4 @@
-import os
+import os, sys
 import logging
 import asyncio
 import traceback
@@ -31,12 +31,12 @@ from telegram.ext import (
 from telegram.constants import ParseMode, ChatAction
 
 import config
-import database
+import database1
 import openai_utils
 
 
 # setup
-db = database.Database()
+db = database1.Database()
 logger = logging.getLogger(__name__)
 
 user_semaphores = {}
@@ -93,15 +93,15 @@ async def register_user_if_not_exists(update: Update, context: CallbackContext, 
         db.set_user_attribute(user.id, "current_model", config.models["available_text_models"][0])
 
     # back compatibility for n_used_tokens field
-    n_used_tokens = db.get_user_attribute(user.id, "n_used_tokens")
-    if isinstance(n_used_tokens, int):  # old format
-        new_n_used_tokens = {
-            "gpt-3.5-turbo": {
-                "n_input_tokens": 0,
-                "n_output_tokens": n_used_tokens
-            }
-        }
-        db.set_user_attribute(user.id, "n_used_tokens", new_n_used_tokens)
+    # n_used_tokens = db.get_user_attribute(user.id, "n_used_tokens")
+    # if isinstance(n_used_tokens, int):  # old format
+    #     new_n_used_tokens = {
+    #         "gpt-3.5-turbo": {
+    #             "n_input_tokens": 0,
+    #             "n_output_tokens": n_used_tokens
+    #         }
+    #     }
+    #     db.set_user_attribute(user.id, "n_used_tokens", new_n_used_tokens)
 
     # voice message transcription
     if db.get_user_attribute(user.id, "n_transcribed_seconds") is None:
@@ -210,7 +210,8 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
     async def message_handle_fn():
         # new dialog timeout
         if use_new_dialog_timeout:
-            if (datetime.now() - db.get_user_attribute(user_id, "last_interaction")).seconds > config.new_dialog_timeout and len(db.get_dialog_messages(user_id)) > 0:
+            last_interaction = db.get_user_attribute(user_id, "last_interaction")
+            if (datetime.now() - last_interaction).seconds > config.new_dialog_timeout and len(db.get_dialog_messages(user_id)) > 0:
                 db.start_new_dialog(user_id)
                 await update.message.reply_text(f"Starting new dialog due to timeout (<b>{config.chat_modes[chat_mode]['name']}</b> mode) ✅", parse_mode=ParseMode.HTML)
         db.set_user_attribute(user_id, "last_interaction", datetime.now())
@@ -290,7 +291,7 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
 
         except Exception as e:
             error_text = f"Something went wrong during completion. Reason: {e}"
-            logger.error(error_text)
+            logger.exception(error_text)
             await update.message.reply_text(error_text)
             return
 
@@ -581,20 +582,21 @@ async def show_balance_handle(update: Update, context: CallbackContext):
     total_n_spent_dollars = 0
     total_n_used_tokens = 0
 
-    n_used_tokens_dict = db.get_user_attribute(user_id, "n_used_tokens")
+    n_used_tokens = db.get_user_attribute(user_id, "n_used_tokens")
     n_generated_images = db.get_user_attribute(user_id, "n_generated_images")
     n_transcribed_seconds = db.get_user_attribute(user_id, "n_transcribed_seconds")
 
     details_text = "🏷️ Details:\n"
-    for model_key in sorted(n_used_tokens_dict.keys()):
-        n_input_tokens, n_output_tokens = n_used_tokens_dict[model_key]["n_input_tokens"], n_used_tokens_dict[model_key]["n_output_tokens"]
+    for token in n_used_tokens:
+        print(token)
+        n_input_tokens, n_output_tokens = token["n_input_tokens"], token["n_output_tokens"]
         total_n_used_tokens += n_input_tokens + n_output_tokens
 
-        n_input_spent_dollars = config.models["info"][model_key]["price_per_1000_input_tokens"] * (n_input_tokens / 1000)
-        n_output_spent_dollars = config.models["info"][model_key]["price_per_1000_output_tokens"] * (n_output_tokens / 1000)
+        n_input_spent_dollars = config.models["info"][token['model']]["price_per_1000_input_tokens"] * (n_input_tokens / 1000)
+        n_output_spent_dollars = config.models["info"][token['model']]["price_per_1000_output_tokens"] * (n_output_tokens / 1000)
         total_n_spent_dollars += n_input_spent_dollars + n_output_spent_dollars
 
-        details_text += f"- {model_key}: <b>{n_input_spent_dollars + n_output_spent_dollars:.03f}$</b> / <b>{n_input_tokens + n_output_tokens} tokens</b>\n"
+        details_text += f"- {token['model']}: <b>{n_input_spent_dollars + n_output_spent_dollars:.03f}$</b> / <b>{n_input_tokens + n_output_tokens} tokens</b>\n"
 
     # image generation
     image_generation_n_spent_dollars = config.models["info"]["dalle-2"]["price_per_1_image"] * n_generated_images
@@ -660,14 +662,26 @@ async def post_init(application: Application):
     ])
 
 def run_bot() -> None:
-    application = (
-        ApplicationBuilder()
-        .token(config.telegram_token)
-        .concurrent_updates(True)
-        .rate_limiter(AIORateLimiter(max_retries=5))
-        .post_init(post_init)
-        .build()
-    )
+    if len(sys.argv)> 2 and sys.argv[1] == 'proxy':
+        print("use proxy")
+        application = (
+            ApplicationBuilder()
+            .token(config.telegram_token)
+            .proxy_url("socks5://127.0.0.1:3080")
+            .concurrent_updates(True)
+            .rate_limiter(AIORateLimiter(max_retries=5))
+            .post_init(post_init)
+            .build()
+        )
+    else:
+        application = (
+            ApplicationBuilder()
+            .token(config.telegram_token)
+            .concurrent_updates(True)
+            .rate_limiter(AIORateLimiter(max_retries=5))
+            .post_init(post_init)
+            .build()
+        )
 
     # add handlers
     user_filter = filters.ALL
