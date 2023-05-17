@@ -54,10 +54,12 @@ class Database:
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY, 
                 dialog_id INTEGER, 
-                message TEXT
+                user TEXT,
+                bot TEXT,
+                date TIMESTAMP
             );
         """)
-        self.cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_dialog_id on messages(dialog_id);")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_dialog_id_date on messages(dialog_id, date);")
 
         self.conn.commit()
 
@@ -163,31 +165,39 @@ class Database:
         if dialog_id is None:
             dialog_id = self.get_user_attribute(user_id, "current_dialog_id")
 
-        self.cursor.execute("SELECT message FROM messages WHERE dialog_id = ?", (dialog_id,))
-        message = self.cursor.fetchone()
-        print(message)
-        if message is None:
+        cur = self.cursor.execute("SELECT * FROM messages WHERE dialog_id = ? order by date ASC", (dialog_id,))
+        rows = cur.fetchall()
+        if rows is None:
             return []
 
         messages = []
-        for m in json.loads(message[0]):
-            m['date'] = datetime.fromisoformat(m['date']) 
-            messages.append(m)
+        for r in rows:
+            messages.append(self.__wrap_message(r, cur.description))
 
         return messages
+    
+    def __wrap_message(self, row: tuple, desc: list):
+        m = {}
+        for i, d in enumerate(desc):
+            m[d[0]] = row[i]
+        return m
+    
+    def get_last_dialog_message(self, user_id: int, dialog_id: Optional[int] = None):
+        if dialog_id is None:
+            dialog_id = self.get_user_attribute(user_id, "current_dialog_id")
+        if dialog_id is None:
+            raise ValueError(f"User {user_id} does not exist")
+        cur = self.cursor.execute("SELECT * FROM messages WHERE dialog_id = ? order by date DESC limit 1", (dialog_id,))
+        row = cur.fetchone()
+        return self.__wrap_message(row, cur.description)
 
-    def set_dialog_messages(self, user_id: int, dialog_messages: list, dialog_id: Optional[int] = None):
+    def insert_dialog_message(self, user_id: int, user: str, bot: str, date: datetime, dialog_id: Optional[int] = None):
         self.check_if_user_exists(user_id, raise_exception=True)
 
         if dialog_id is None:
             dialog_id = self.get_user_attribute(user_id, "current_dialog_id")
 
-        print(dialog_messages)
-        for i, m in enumerate(dialog_messages):
-            m['date'] = datetime.isoformat(m['date']) 
-            dialog_messages[i] = m
-
-        db_message=json.dumps(dialog_messages)
-        self.cursor.execute("INSERT INTO messages (dialog_id, message) VALUES (?, ?) ON CONFLICT(dialog_id) DO UPDATE SET message = ?", (dialog_id, db_message, db_message))
+        self.cursor.execute("INSERT INTO messages(dialog_id, user, bot, date) VALUES (?, ?, ?, ?) ", 
+                            (dialog_id, user, bot, date))
 
         self.conn.commit()

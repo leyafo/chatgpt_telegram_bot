@@ -170,13 +170,11 @@ async def retry_handle(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     db.set_user_attribute(user_id, "last_interaction", datetime.now())
 
-    dialog_messages = db.get_dialog_messages(user_id, dialog_id=None)
-    if len(dialog_messages) == 0:
+    last_dialog_message = db.get_last_dialog_message(user_id, dialog_id=None)
+    if not last_dialog_message:
         await update.message.reply_text("No message to retry 🤷‍♂️")
         return
 
-    last_dialog_message = dialog_messages.pop()
-    db.set_dialog_messages(user_id, dialog_messages, dialog_id=None)  # last message was removed from the context
 
     await message_handle(update, context, message=last_dialog_message["user"], use_new_dialog_timeout=False)
 
@@ -211,7 +209,7 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
         # new dialog timeout
         if use_new_dialog_timeout:
             last_interaction = db.get_user_attribute(user_id, "last_interaction")
-            if (datetime.now() - last_interaction).seconds > config.new_dialog_timeout and len(db.get_dialog_messages(user_id)) > 0:
+            if (datetime.now() - last_interaction).seconds > config.new_dialog_timeout and len(db.get_last_dialog_message(user_id))!=0:
                 db.start_new_dialog(user_id)
                 await update.message.reply_text(f"Starting new dialog due to timeout (<b>{config.chat_modes[chat_mode]['name']}</b> mode) ✅", parse_mode=ParseMode.HTML)
         db.set_user_attribute(user_id, "last_interaction", datetime.now())
@@ -275,10 +273,11 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
                 prev_answer = answer
 
             # update user data
-            new_dialog_message = {"user": _message, "bot": answer, "date": datetime.now()}
-            db.set_dialog_messages(
+            db.insert_dialog_message(
                 user_id,
-                db.get_dialog_messages(user_id, dialog_id=None) + [new_dialog_message],
+                _message,
+                answer,
+                datetime.now(),
                 dialog_id=None
             )
 
