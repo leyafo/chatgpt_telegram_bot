@@ -117,13 +117,12 @@ class Database:
     def get_user_attribute(self, user_id: int, key: str):
         self.check_if_user_exists(user_id, raise_exception=True)
         if key == 'n_used_tokens':
-            self.cursor.execute(f"SELECT * FROM tokens WHERE user_id = ?", (user_id,))
-            rows = self.cursor.fetchall()
+            cur = self.cursor.execute(f"SELECT * FROM tokens WHERE user_id = ?", (user_id,))
+            rows = cur.fetchall()
             result = []
             for r in rows:
-                result.append({"id":r[0], "user_id":r[1], "model": r[2], "n_input_tokens": r[3], "n_output_tokens": r[4]})
-            if result:
-                return result
+                result.append(self.__wrap_message(r, cur.description))
+            return result
         else:
             self.cursor.execute(f"SELECT {key} FROM user WHERE id = ?", (user_id,))
             result = self.cursor.fetchone()
